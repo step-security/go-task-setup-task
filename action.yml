@@ -1,0 +1,23 @@
+name: "step-security/go-task-setup-task"
+description: "Download Task and add it to the PATH"
+author: "step-security"
+branding:
+  icon: "box"
+  color: "blue"
+inputs:
+  version:
+    description: "Version to use. Example: 3.4.2"
+    required: true
+    default: "3.x"
+  repo-token:
+    description: "Token with permissions to do repo things"
+    required: false
+    default: "${{ github.token }}"
+  max-retries:
+    description: "Maximum number of retry attempts for HTTP requests"
+    required: false
+    default: "3"
+
+runs:
+  using: "node24"
+  main: "dist/index.js"

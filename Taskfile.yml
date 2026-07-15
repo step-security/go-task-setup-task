@@ -1,0 +1,359 @@
+version: "3"
+
+vars:
+  # Last version of ajv-cli with support for the JSON schema "Draft 4" specification
+  SCHEMA_DRAFT_4_AJV_CLI_VERSION: 3.3.0
+
+tasks:
+  build:
+    desc: Build the project
+    deps:
+      - task: ts:build
+
+  check:
+    desc: Check for problems with the project
+    deps:
+      - task: action:validate
+      - task: general:check-spelling
+      - task: markdown:check-links
+      - task: markdown:lint
+      - task: npm:validate
+      - task: ts:lint
+      - task: ts:test
+      - task: ts:validate
+        vars:
+          TSCONFIG_PATH: "./tsconfig.json"
+
+  fix:
+    desc: Make automated corrections to the project's files
+    deps:
+      - task: general:correct-spelling
+      - task: general:format
+      - task: markdown:fix
+      - task: ts:build
+      - task: ts:fix-lint
+
+  action:validate:
+    desc: Validate GitHub Actions metadata against JSON schema
+    vars:
+      ACTION_METADATA_SCHEMA_PATH:
+        sh: mktemp -t github-action-schema-XXXXXXXXXX.json
+    deps:
+      - task: npm:install-deps
+    cmds:
+      - wget --quiet --output-document="{{.ACTION_METADATA_SCHEMA_PATH}}" https://json.schemastore.org/github-action
+      - npx ajv validate --strict=false -s "{{.ACTION_METADATA_SCHEMA_PATH}}" -d "action.yml"
+
+  docs:generate:
+    desc: Create all generated documentation content
+    # This is an "umbrella" task used to call any documentation generation processes the project has.
+    # It can be left empty if there are none.
+
+  # Source: https://github.com/arduino/tooling-project-assets/blob/main/workflow-templates/assets/spell-check-task/Taskfile.yml
+  general:check-spelling:
+    desc: Check for commonly misspelled words
+    deps:
+      - task: poetry:install-deps
+    cmds:
+      - poetry run codespell
+
+  # Source: https://github.com/arduino/tooling-project-assets/blob/main/workflow-templates/assets/spell-check-task/Taskfile.yml
+  general:correct-spelling:
+    desc: Correct commonly misspelled words where possible
+    deps:
+      - task: poetry:install-deps
+    cmds:
+      - poetry run codespell --write-changes
+
+  general:format:
+    desc: Format all supported files with oxfmt
+    deps:
+      - task: npm:install-deps
+    cmds:
+      - npx oxfmt --write .
+
+  # Source: https://github.com/arduino/tooling-project-assets/blob/main/workflow-templates/assets/check-npm-dependencies-task/Taskfile.yml
+  general:install-deps:
+    desc: Install project dependencies
+    deps:
+      - task: npm:install-deps
+
+  # Source: https://github.com/arduino/tooling-project-assets/blob/main/workflow-templates/assets/check-markdown-task/Taskfile.yml
+  markdown:check-links:
+    desc: Check for broken links
+    deps:
+      - task: docs:generate
+      - task: npm:install-deps
+    cmds:
+      - |
+        if [[ "{{.OS}}" == "Windows_NT" ]]; then
+          if ! which markdown-link-check &>/dev/null; then
+            echo "markdown-link-check not found or not in PATH. Please install: https://github.com/tcort/markdown-link-check#readme"
+            exit 1
+          fi
+          set +o errexit
+          STATUS=0
+          for file in \
+            $(find . -type d -name node_modules -prune -o -regex ".*[.]md" -print); do
+            markdown-link-check \
+              --quiet \
+              --config "./.markdown-link-check.json" \
+              "$file"
+            STATUS=$(( $STATUS + $? ))
+          done
+          exit $STATUS
+        else
+          STATUS=0
+          for file in \
+            $(find . -type d -name node_modules -prune -o -regex ".*[.]md" -print); do
+            npx markdown-link-check \
+              --quiet \
+              --config "./.markdown-link-check.json" \
+              "$file"
+            STATUS=$(( $STATUS + $? ))
+          done
+          exit $STATUS
+        fi
+
+  # Source: https://github.com/arduino/tooling-project-assets/blob/main/workflow-templates/assets/check-markdown-task/Taskfile.yml
+  markdown:fix:
+    desc: Automatically correct linting violations in Markdown files where possible
+    deps:
+      - task: npm:install-deps
+    cmds:
+      - npx markdownlint --fix "**/*.md"
+
+  # Source: https://github.com/arduino/tooling-project-assets/blob/main/workflow-templates/assets/check-markdown-task/Taskfile.yml
+  markdown:lint:
+    desc: Check for problems in Markdown files
+    deps:
+      - task: npm:install-deps
+    cmds:
+      - npx markdownlint "**/*.md"
+
+  # Source: https://github.com/arduino/tooling-project-assets/blob/main/workflow-templates/assets/npm-task/Taskfile.yml
+  npm:install-deps:
+    desc: Install dependencies managed by npm
+    cmds:
+      - npm ci
+
+  # Source: https://github.com/arduino/tooling-project-assets/blob/main/workflow-templates/assets/check-npm-task/Taskfile.yml
+  npm:validate:
+    desc: Validate npm configuration files against their JSON schema
+    vars:
+      # Source: https://github.com/SchemaStore/schemastore/blob/master/src/schemas/json/package.json
+      SCHEMA_URL: https://json.schemastore.org/package.json
+      SCHEMA_PATH:
+        sh: task utility:mktemp-file TEMPLATE="package-json-schema-XXXXXXXXXX.json"
+      # Source: https://github.com/SchemaStore/schemastore/blob/master/src/schemas/json/ava.json
+      AVA_SCHEMA_URL: https://json.schemastore.org/ava.json
+      AVA_SCHEMA_PATH:
+        sh: task utility:mktemp-file TEMPLATE="ava-schema-XXXXXXXXXX.json"
+      # Source: https://github.com/SchemaStore/schemastore/blob/master/src/schemas/json/base.json
+      BASE_SCHEMA_URL: https://json.schemastore.org/base.json
+      BASE_SCHEMA_PATH:
+        sh: task utility:mktemp-file TEMPLATE="base-schema-XXXXXXXXXX.json"
+      # Source: https://github.com/SchemaStore/schemastore/blob/master/src/schemas/json/eslintrc.json
+      ESLINTRC_SCHEMA_URL: https://json.schemastore.org/eslintrc.json
+      ESLINTRC_SCHEMA_PATH:
+        sh: task utility:mktemp-file TEMPLATE="eslintrc-schema-XXXXXXXXXX.json"
+      # Source: https://github.com/SchemaStore/schemastore/blob/master/src/schemas/json/jscpd.json
+      JSCPD_SCHEMA_URL: https://json.schemastore.org/jscpd.json
+      JSCPD_SCHEMA_PATH:
+        sh: task utility:mktemp-file TEMPLATE="jscpd-schema-XXXXXXXXXX.json"
+      # Source: https://github.com/SchemaStore/schemastore/blob/master/src/schemas/json/npm-badges.json
+      NPM_BADGES_SCHEMA_URL: https://json.schemastore.org/npm-badges.json
+      NPM_BADGES_SCHEMA_PATH:
+        sh: task utility:mktemp-file TEMPLATE="npm-badges-schema-XXXXXXXXXX.json"
+      # Source: https://github.com/SchemaStore/schemastore/blob/master/src/schemas/json/nodemon.json
+      NODEMON_SCHEMA_URL: https://json.schemastore.org/nodemon.json
+      NODEMON_SCHEMA_PATH:
+        sh: task utility:mktemp-file TEMPLATE="nodemon-schema-XXXXXXXXXX.json"
+      # Source: https://github.com/SchemaStore/schemastore/blob/master/src/schemas/json/partial-eslint-plugins.json
+      PARTIAL_ESLINT_PLUGINS_SCHEMA_URL: https://json.schemastore.org/partial-eslint-plugins.json
+      PARTIAL_ESLINT_PLUGINS_PATH:
+        sh: task utility:mktemp-file TEMPLATE="partial-eslint-plugins-schema-XXXXXXXXXX.json"
+      # Source: https://github.com/SchemaStore/schemastore/blob/master/src/schemas/json/prettierrc.json
+      PRETTIERRC_SCHEMA_URL: https://json.schemastore.org/prettierrc.json
+      PRETTIERRC_SCHEMA_PATH:
+        sh: task utility:mktemp-file TEMPLATE="prettierrc-schema-XXXXXXXXXX.json"
+      # Source: https://github.com/SchemaStore/schemastore/blob/master/src/schemas/json/semantic-release.json
+      SEMANTIC_RELEASE_SCHEMA_URL: https://json.schemastore.org/semantic-release.json
+      SEMANTIC_RELEASE_SCHEMA_PATH:
+        sh: task utility:mktemp-file TEMPLATE="semantic-release-schema-XXXXXXXXXX.json"
+      # Source: https://github.com/SchemaStore/schemastore/blob/master/src/schemas/json/stylelintrc.json
+      STYLELINTRC_SCHEMA_URL: https://json.schemastore.org/stylelintrc.json
+      STYLELINTRC_SCHEMA_PATH:
+        sh: task utility:mktemp-file TEMPLATE="stylelintrc-schema-XXXXXXXXXX.json"
+      INSTANCE_PATH: >-
+        {{default "." .PROJECT_PATH}}/package.json
+      PROJECT_FOLDER:
+        sh: pwd
+      WORKING_FOLDER:
+        sh: task utility:mktemp-folder TEMPLATE="dependabot-validate-XXXXXXXXXX"
+    cmds:
+      - wget --quiet --output-document="{{.SCHEMA_PATH}}" {{.SCHEMA_URL}}
+      - wget --quiet --output-document="{{.AVA_SCHEMA_PATH}}" {{.AVA_SCHEMA_URL}}
+      - wget --quiet --output-document="{{.BASE_SCHEMA_PATH}}" {{.BASE_SCHEMA_URL}}
+      - wget --quiet --output-document="{{.ESLINTRC_SCHEMA_PATH}}" {{.ESLINTRC_SCHEMA_URL}}
+      - wget --quiet --output-document="{{.JSCPD_SCHEMA_PATH}}" {{.JSCPD_SCHEMA_URL}}
+      - wget --quiet --output-document="{{.NPM_BADGES_SCHEMA_PATH}}" {{.NPM_BADGES_SCHEMA_URL}}
+      - wget --quiet --output-document="{{.NODEMON_SCHEMA_PATH}}" {{.NODEMON_SCHEMA_URL}}
+      - wget --quiet --output-document="{{.PARTIAL_ESLINT_PLUGINS_PATH}}" {{.PARTIAL_ESLINT_PLUGINS_SCHEMA_URL}}
+      - wget --quiet --output-document="{{.PRETTIERRC_SCHEMA_PATH}}" {{.PRETTIERRC_SCHEMA_URL}}
+      - wget --quiet --output-document="{{.SEMANTIC_RELEASE_SCHEMA_PATH}}" {{.SEMANTIC_RELEASE_SCHEMA_URL}}
+      - wget --quiet --output-document="{{.STYLELINTRC_SCHEMA_PATH}}" {{.STYLELINTRC_SCHEMA_URL}}
+      - |
+        cd "{{.WORKING_FOLDER}}"  # Workaround for https://github.com/npm/cli/issues/3210
+        npx ajv-cli@{{.SCHEMA_DRAFT_4_AJV_CLI_VERSION}} validate \
+          --all-errors \
+          -s "{{.SCHEMA_PATH}}" \
+          -r "{{.AVA_SCHEMA_PATH}}" \
+          -r "{{.BASE_SCHEMA_PATH}}" \
+          -r "{{.ESLINTRC_SCHEMA_PATH}}" \
+          -r "{{.JSCPD_SCHEMA_PATH}}" \
+          -r "{{.NPM_BADGES_SCHEMA_PATH}}" \
+          -r "{{.NODEMON_SCHEMA_PATH}}" \
+          -r "{{.PARTIAL_ESLINT_PLUGINS_PATH}}" \
+          -r "{{.PRETTIERRC_SCHEMA_PATH}}" \
+          -r "{{.SEMANTIC_RELEASE_SCHEMA_PATH}}" \
+          -r "{{.STYLELINTRC_SCHEMA_PATH}}" \
+          -d "{{.PROJECT_FOLDER}}/{{.INSTANCE_PATH}}"
+
+  # Source: https://github.com/arduino/tooling-project-assets/blob/main/workflow-templates/assets/poetry-task/Taskfile.yml
+  poetry:install-deps:
+    desc: Install dependencies managed by Poetry
+    cmds:
+      - poetry install --no-root
+
+  release:
+    desc: "Tag and push a new release. Usage: task release VERSION=X.Y.Z"
+    vars:
+      MAJOR: '{{splitList "." .VERSION | first}}'
+      DATE: '{{dateInZone "2006-01-02" now "UTC"}}'
+      RELEASE_NOTES_PATH:
+        sh: task utility:mktemp-file TEMPLATE="release-notes.XXXXXXXXXX"
+    preconditions:
+      - sh: '[[ "{{.VERSION}}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]'
+        msg: 'VERSION must be X.Y.Z (no "v" prefix). Got: "{{.VERSION}}"'
+      - sh: '[[ -z "$(git status --porcelain)" ]]'
+        msg: "Working tree must be clean."
+      - sh: '[[ "$(git rev-parse --abbrev-ref HEAD)" == "main" ]]'
+        msg: "Must be on main branch."
+      - sh: 'git fetch origin main && [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]]'
+        msg: "main must be up to date with origin/main."
+      - sh: 'grep -q "^## Unreleased$" CHANGELOG.md'
+        msg: 'CHANGELOG.md must contain an "## Unreleased" section.'
+      - sh: '! git rev-parse "v{{.VERSION}}" >/dev/null 2>&1'
+        msg: "Tag v{{.VERSION}} already exists."
+      - sh: "command -v gh >/dev/null 2>&1"
+        msg: "gh CLI is required. Install: https://cli.github.com/"
+    cmds:
+      - node scripts/promote-changelog.mjs "{{.VERSION}}" "{{.DATE}}"
+      - git add CHANGELOG.md
+      - 'git commit -m "chore: release v{{.VERSION}}"'
+      - git tag "v{{.VERSION}}"
+      - git tag -f "v{{.MAJOR}}"
+      - git push origin main
+      - git push origin "v{{.VERSION}}"
+      - git push origin "v{{.MAJOR}}" --force
+      - node scripts/extract-changelog-section.mjs "{{.VERSION}}" > "{{.RELEASE_NOTES_PATH}}"
+      - gh release create "v{{.VERSION}}" --title "v{{.VERSION}}" --draft --notes-file "{{.RELEASE_NOTES_PATH}}"
+
+  ts:build:
+    desc: Build the action's TypeScript code.
+    deps:
+      - task: npm:install-deps
+    cmds:
+      - npx tsc
+      - npx ncc build
+
+  ts:fix-lint:
+    desc: Fix TypeScript code linting violations
+    deps:
+      - task: npm:install-deps
+    cmds:
+      - npx oxlint src/ __tests__/ --fix
+
+  ts:lint:
+    desc: Lint TypeScript code
+    deps:
+      - task: npm:install-deps
+    cmds:
+      - npx oxlint src/ __tests__/
+
+  ts:test:
+    desc: Test the action's TypeScript code.
+    deps:
+      - task: npm:install-deps
+    cmds:
+      - npx vitest run
+
+  ts:validate:
+    desc: Validate TypeScript configuration file against its JSON schema
+    vars:
+      # Source: https://github.com/SchemaStore/schemastore/blob/master/src/schemas/json/tsconfig.json
+      SCHEMA_URL: https://json.schemastore.org/tsconfig.json
+      SCHEMA_PATH:
+        sh: task utility:mktemp-file TEMPLATE="tsconfig-schema-XXXXXXXXXX.json"
+      INSTANCE_PATH: '{{default "./tsconfig.json" .TSCONFIG_PATH}}'
+      WORKING_FOLDER:
+        sh: task utility:mktemp-folder TEMPLATE="ts-validate-XXXXXXXXXX"
+      WORKING_INSTANCE_PATH:
+        sh: echo "{{.WORKING_FOLDER}}/$(basename "{{.INSTANCE_PATH}}")"
+    deps:
+      - task: npm:install-deps
+    cmds:
+      - |
+        # TypeScript allows comments in tsconfig.json.
+        # ajv-cli did not support comments in JSON at the 3.x version in use (support was added in a later version).
+        npx strip-json-comments \
+          --no-whitespace \
+          "{{.INSTANCE_PATH}}" \
+          > "{{.WORKING_INSTANCE_PATH}}"
+      - |
+        wget \
+          --quiet \
+          --output-document="{{.SCHEMA_PATH}}" \
+          {{.SCHEMA_URL}}
+      - |
+        cd "{{.WORKING_FOLDER}}"  # Workaround for https://github.com/npm/cli/issues/3210
+        npx ajv-cli@{{.SCHEMA_DRAFT_4_AJV_CLI_VERSION}} validate \
+          --all-errors \
+          -s "{{.SCHEMA_PATH}}" \
+          -d "{{.WORKING_INSTANCE_PATH}}"
+
+  # Make a temporary file named according to the passed TEMPLATE variable and print the path passed to stdout
+  # Source: https://github.com/arduino/tooling-project-assets/blob/main/workflow-templates/assets/windows-task/Taskfile.yml
+  utility:mktemp-file:
+    vars:
+      RAW_PATH:
+        sh: mktemp "${TMPDIR:-/tmp}/{{.TEMPLATE}}"
+    cmds:
+      - task: utility:normalize-path
+        vars:
+          RAW_PATH: "{{.RAW_PATH}}"
+
+  # Make a temporary folder named according to the passed TEMPLATE variable and print the path passed to stdout
+  # Source: https://github.com/arduino/tooling-project-assets/blob/main/workflow-templates/assets/windows-task/Taskfile.yml
+  utility:mktemp-folder:
+    vars:
+      RAW_PATH:
+        sh: mktemp -d "${TMPDIR:-/tmp}/{{.TEMPLATE}}"
+    cmds:
+      - task: utility:normalize-path
+        vars:
+          RAW_PATH: "{{.RAW_PATH}}"
+
+  # Print a normalized version of the path passed via the RAW_PATH variable to stdout
+  # Source: https://github.com/arduino/tooling-project-assets/blob/main/workflow-templates/assets/windows-task/Taskfile.yml
+  utility:normalize-path:
+    cmds:
+      - |
+        if [[ "{{.OS}}" == "Windows_NT" ]] && which cygpath &>/dev/null; then
+            # Even though the shell handles POSIX format absolute paths as expected, external applications do not.
+            # So paths passed to such applications must first be converted to Windows format.
+            cygpath -w "{{.RAW_PATH}}"
+        else
+          echo "{{.RAW_PATH}}"
+        fi
