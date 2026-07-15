@@ -1,0 +1,3 @@
+[[IgnoredVulns]]
+id = "GHSA-8gh8-hqwg-xf34"
+reason = "fast-json-patch is a transitive dependency of ajv-cli (devDependency only, never bundled into the action runtime)"
