@@ -192,10 +192,29 @@ async function verifyChecksum(
   info(`Checksum verified for ${fileName}`);
 }
 
+async function verifyProvidedChecksum(path: string, expectedChecksum?: string): Promise<void> {
+  if (!expectedChecksum) {
+    return;
+  }
+
+  const normalizedExpected = expectedChecksum.trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(normalizedExpected)) {
+    throw new Error("The checksum input must be a SHA256 hex digest.");
+  }
+
+  const actualChecksum = await computeSHA256(path);
+  if (actualChecksum !== normalizedExpected) {
+    throw new Error(
+      `Downloaded Task archive checksum mismatch. Expected ${normalizedExpected}, got ${actualChecksum}.`,
+    );
+  }
+}
+
 async function downloadRelease(
   version: string,
   repoToken: string,
   maxRetries: number,
+  checksum?: string,
 ): Promise<string> {
   // Download
   const fileName: string = getFileName();
@@ -213,6 +232,9 @@ async function downloadRelease(
     }
     throw new Error(`Failed to download version ${version}: ${error}`);
   }
+
+  // Verify provided checksum if given
+  await verifyProvidedChecksum(downloadPath, checksum);
 
   // Verify integrity via checksum file
   await verifyChecksum(downloadPath, version, fileName, repoToken, maxRetries);
@@ -235,7 +257,12 @@ async function downloadRelease(
   return cacheDir(extPath, "task", version);
 }
 
-export async function getTask(version: string, repoToken: string, maxRetries: number = 3) {
+export async function getTask(
+  version: string,
+  repoToken: string,
+  maxRetries: number = 3,
+  checksum?: string,
+) {
   // resolve the version number
   const targetVersion = await computeVersion(version, repoToken, maxRetries);
 
@@ -245,7 +272,7 @@ export async function getTask(version: string, repoToken: string, maxRetries: nu
 
   // if not: download, extract and cache
   if (!toolPath) {
-    toolPath = await downloadRelease(targetVersion, repoToken, maxRetries);
+    toolPath = await downloadRelease(targetVersion, repoToken, maxRetries, checksum);
     debug(`Task cached under ${toolPath}`);
   }
 
