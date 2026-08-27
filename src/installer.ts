@@ -10,14 +10,14 @@
 // software without disclosing the source code of your own applications. To purchase
 // a commercial license, send an email to license@arduino.cc
 
-import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
 import { arch, platform } from "node:os";
 import { join } from "node:path";
 import { format } from "node:util";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { HttpClient } from "@actions/http-client";
 import { rcompare, valid } from "semver";
-import { addPath, debug, info, warning } from "@actions/core";
+import { addPath, debug, info } from "@actions/core";
 import { cacheDir, downloadTool, extractTar, extractZip, find } from "@actions/tool-cache";
 import { mkdirP, mv } from "@actions/io";
 
@@ -144,59 +144,25 @@ function getFileName() {
   return filename;
 }
 
-async function computeSHA256(filePath: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const hash = createHash("sha256");
-    createReadStream(filePath)
-      .on("data", (chunk) => hash.update(chunk))
-      .on("end", () => resolve(hash.digest("hex")))
-      .on("error", reject);
-  });
-}
-
-async function verifyChecksum(
-  filePath: string,
-  version: string,
-  fileName: string,
-  repoToken: string,
-  maxRetries: number,
-): Promise<void> {
-  const http = new HttpClient("setup-task", [], { allowRetries: true, maxRetries });
-  const headers = repoToken ? { Authorization: `Bearer ${repoToken}` } : undefined;
-  const checksumUrl = `https://github.com/go-task/task/releases/download/${version}/task_checksums.txt`;
-
-  let body: string;
-  try {
-    const response = await http.get(checksumUrl, headers);
-    body = await response.readBody();
-  } catch {
-    warning("Unable to fetch checksums. Proceeding without integrity verification.");
+function verifyChecksum(path: string, expectedChecksum?: string): void {
+  if (!expectedChecksum) {
     return;
   }
 
-  const expectedLine = body.split("\n").find((line) => line.trim().endsWith(fileName));
-  if (!expectedLine) {
-    warning(`No checksum entry found for ${fileName}. Proceeding without integrity verification.`);
-    return;
+  const normalizedExpected = expectedChecksum.trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(normalizedExpected)) {
+    throw new Error("The checksum input must be a SHA256 hex digest.");
   }
 
-  const expectedHash = expectedLine.trim().split(/\s+/)[0];
-  const actualHash = await computeSHA256(filePath);
-
-  if (actualHash !== expectedHash) {
+  const actualChecksum = createHash("sha256").update(readFileSync(path)).digest("hex");
+  if (actualChecksum !== normalizedExpected) {
     throw new Error(
-      `Checksum mismatch for ${fileName}: expected ${expectedHash}, got ${actualHash}`,
+      `Downloaded Task archive checksum mismatch. Expected ${normalizedExpected}, got ${actualChecksum}.`,
     );
   }
-
-  info(`Checksum verified for ${fileName}`);
 }
 
-async function downloadRelease(
-  version: string,
-  repoToken: string,
-  maxRetries: number,
-): Promise<string> {
+async function downloadRelease(version: string, checksum?: string): Promise<string> {
   // Download
   const fileName: string = getFileName();
   const downloadUrl: string = format(
@@ -204,7 +170,7 @@ async function downloadRelease(
     version,
     fileName,
   );
-  let downloadPath: string | null = null;
+  let downloadPath = "";
   try {
     downloadPath = await downloadTool(downloadUrl);
   } catch (error) {
@@ -213,12 +179,10 @@ async function downloadRelease(
     }
     throw new Error(`Failed to download version ${version}: ${error}`);
   }
-
-  // Verify integrity via checksum file
-  await verifyChecksum(downloadPath, version, fileName, repoToken, maxRetries);
+  verifyChecksum(downloadPath, checksum);
 
   // Extract
-  let extPath: string | null = null;
+  let extPath = "";
   if (osPlat === "win32") {
     extPath = await extractZip(downloadPath);
     // Create a bin/ folder and move `task` there
@@ -235,7 +199,12 @@ async function downloadRelease(
   return cacheDir(extPath, "task", version);
 }
 
-export async function getTask(version: string, repoToken: string, maxRetries: number = 3) {
+export async function getTask(
+  version: string,
+  repoToken: string,
+  maxRetries: number = 3,
+  checksum?: string,
+) {
   // resolve the version number
   const targetVersion = await computeVersion(version, repoToken, maxRetries);
 
@@ -245,7 +214,7 @@ export async function getTask(version: string, repoToken: string, maxRetries: nu
 
   // if not: download, extract and cache
   if (!toolPath) {
-    toolPath = await downloadRelease(targetVersion, repoToken, maxRetries);
+    toolPath = await downloadRelease(targetVersion, checksum);
     debug(`Task cached under ${toolPath}`);
   }
 

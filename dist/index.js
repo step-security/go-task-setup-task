@@ -38767,7 +38767,7 @@ function core_error(message, properties = {}) {
  * @param properties optional properties to add to the annotation.
  */
 function warning(message, properties = {}) {
-    command_issueCommand('warning', utils_toCommandProperties(properties), message instanceof Error ? message.toString() : message);
+    issueCommand('warning', toCommandProperties(properties), message instanceof Error ? message.toString() : message);
 }
 /**
  * Adds a notice issue
@@ -38869,16 +38869,16 @@ function getIDToken(aud) {
  */
 
 //# sourceMappingURL=core.js.map
-// EXTERNAL MODULE: external "node:crypto"
-var external_node_crypto_ = __nccwpck_require__(7598);
-;// CONCATENATED MODULE: external "node:fs"
-const external_node_fs_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:fs");
 ;// CONCATENATED MODULE: external "node:os"
 const external_node_os_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:os");
 ;// CONCATENATED MODULE: external "node:path"
 const external_node_path_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:path");
 // EXTERNAL MODULE: external "node:util"
 var external_node_util_ = __nccwpck_require__(7975);
+// EXTERNAL MODULE: external "node:crypto"
+var external_node_crypto_ = __nccwpck_require__(7598);
+;// CONCATENATED MODULE: external "node:fs"
+const external_node_fs_namespaceObject = __WEBPACK_EXTERNAL_createRequire(import.meta.url)("node:fs");
 // EXTERNAL MODULE: ./node_modules/semver/index.js
 var node_modules_semver = __nccwpck_require__(2088);
 ;// CONCATENATED MODULE: ./node_modules/@actions/tool-cache/lib/manifest.js
@@ -39790,45 +39790,24 @@ function getFileName() {
     const filename = (0,external_node_util_.format)("task_%s_%s.%s", taskPlatform, taskArch, ext);
     return filename;
 }
-async function computeSHA256(filePath) {
-    return new Promise((resolve, reject) => {
-        const hash = (0,external_node_crypto_.createHash)("sha256");
-        (0,external_node_fs_namespaceObject.createReadStream)(filePath)
-            .on("data", (chunk) => hash.update(chunk))
-            .on("end", () => resolve(hash.digest("hex")))
-            .on("error", reject);
-    });
-}
-async function verifyChecksum(filePath, version, fileName, repoToken, maxRetries) {
-    const http = new lib_HttpClient("setup-task", [], { allowRetries: true, maxRetries });
-    const headers = repoToken ? { Authorization: `Bearer ${repoToken}` } : undefined;
-    const checksumUrl = `https://github.com/go-task/task/releases/download/${version}/task_checksums.txt`;
-    let body;
-    try {
-        const response = await http.get(checksumUrl, headers);
-        body = await response.readBody();
-    }
-    catch {
-        warning("Unable to fetch checksums. Proceeding without integrity verification.");
+function verifyChecksum(path, expectedChecksum) {
+    if (!expectedChecksum) {
         return;
     }
-    const expectedLine = body.split("\n").find((line) => line.trim().endsWith(fileName));
-    if (!expectedLine) {
-        warning(`No checksum entry found for ${fileName}. Proceeding without integrity verification.`);
-        return;
+    const normalizedExpected = expectedChecksum.trim().toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(normalizedExpected)) {
+        throw new Error("The checksum input must be a SHA256 hex digest.");
     }
-    const expectedHash = expectedLine.trim().split(/\s+/)[0];
-    const actualHash = await computeSHA256(filePath);
-    if (actualHash !== expectedHash) {
-        throw new Error(`Checksum mismatch for ${fileName}: expected ${expectedHash}, got ${actualHash}`);
+    const actualChecksum = (0,external_node_crypto_.createHash)("sha256").update((0,external_node_fs_namespaceObject.readFileSync)(path)).digest("hex");
+    if (actualChecksum !== normalizedExpected) {
+        throw new Error(`Downloaded Task archive checksum mismatch. Expected ${normalizedExpected}, got ${actualChecksum}.`);
     }
-    info(`Checksum verified for ${fileName}`);
 }
-async function downloadRelease(version, repoToken, maxRetries) {
+async function downloadRelease(version, checksum) {
     // Download
     const fileName = getFileName();
     const downloadUrl = (0,external_node_util_.format)("https://github.com/go-task/task/releases/download/%s/%s", version, fileName);
-    let downloadPath = null;
+    let downloadPath = "";
     try {
         downloadPath = await downloadTool(downloadUrl);
     }
@@ -39838,10 +39817,9 @@ async function downloadRelease(version, repoToken, maxRetries) {
         }
         throw new Error(`Failed to download version ${version}: ${error}`);
     }
-    // Verify integrity via checksum file
-    await verifyChecksum(downloadPath, version, fileName, repoToken, maxRetries);
+    verifyChecksum(downloadPath, checksum);
     // Extract
-    let extPath = null;
+    let extPath = "";
     if (osPlat === "win32") {
         extPath = await extractZip(downloadPath);
         // Create a bin/ folder and move `task` there
@@ -39857,7 +39835,7 @@ async function downloadRelease(version, repoToken, maxRetries) {
     // Install into the local tool cache - node extracts with a root folder that matches the fileName downloaded
     return cacheDir(extPath, "task", version);
 }
-async function getTask(version, repoToken, maxRetries = 3) {
+async function getTask(version, repoToken, maxRetries = 3, checksum) {
     // resolve the version number
     const targetVersion = await computeVersion(version, repoToken, maxRetries);
     // look if the binary is cached
@@ -39865,7 +39843,7 @@ async function getTask(version, repoToken, maxRetries = 3) {
     toolPath = find("task", targetVersion);
     // if not: download, extract and cache
     if (!toolPath) {
-        toolPath = await downloadRelease(targetVersion, repoToken, maxRetries);
+        toolPath = await downloadRelease(targetVersion, checksum);
         core_debug(`Task cached under ${toolPath}`);
     }
     toolPath = (0,external_node_path_namespaceObject.join)(toolPath, "bin");
@@ -47719,7 +47697,8 @@ async function run() {
         const version = getInput("version", { required: true });
         const repoToken = getInput("repo-token");
         const maxRetries = parseInt(getInput("max-retries") || "3", 10);
-        await getTask(version, repoToken, maxRetries);
+        const checksum = getInput("checksum");
+        await getTask(version, repoToken, maxRetries, checksum || undefined);
     }
     catch (error) {
         if (error instanceof Error) {
